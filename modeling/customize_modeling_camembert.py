@@ -1,4 +1,4 @@
-# MODIFIED FROM https://github.com/huggingface/transformers/blob/main/src/transformers/models/xlm_roberta/modeling_xlm_roberta.py
+# MODIFIED FROM https://github.com/huggingface/transformers/blob/main/src/transformers/models/camembert/modeling_camembert.py
 # ACCORDING TO https://github.com/hmohebbi/ValueZeroing/blob/main/modeling/customized_modeling_bert.py
 
 import math
@@ -15,22 +15,22 @@ from transformers.modeling_outputs import (
     BaseModelOutputWithPoolingAndCrossAttentions,
     BaseModelOutputWithPastAndCrossAttentions
 )
-from transformers.models.xlm_roberta.modeling_xlm_roberta import (
-    XLMRobertaSelfOutput,
-    XLMRobertaIntermediate,
-    XLMRobertaOutput,
-    XLMRobertaPooler,
-    XLMRobertaEmbeddings
+from transformers.models.camembert.modeling_camembert import (
+    CamembertSelfOutput,
+    CamembertIntermediate,
+    CamembertOutput,
+    CamembertPooler,
+    CamembertEmbeddings
 )
 from transformers.pytorch_utils import apply_chunking_to_forward, find_pruneable_heads_and_indices, prune_linear_layer
 from transformers.utils import logging
 from transformers.modeling_utils import PreTrainedModel
 
-from transformers.models.xlm_roberta.configuration_xlm_roberta import XLMRobertaConfig
+from transformers.models.camembert.configuration_camembert import CamembertConfig
 
 logger = logging.get_logger(__name__)
 
-class XLMRobertaSelfAttentionVZ(nn.Module):
+class CamembertSelfAttentionVZ(nn.Module):
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
@@ -138,7 +138,7 @@ class XLMRobertaSelfAttentionVZ(nn.Module):
 
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
         if attention_mask is not None:
-            # Apply the attention mask is (precomputed for all layers in XLMRobertaModel forward() function)
+            # Apply the attention mask is (precomputed for all layers in CamembertModel forward() function)
             attention_scores = attention_scores + attention_mask
 
         # Normalize the attention scores to probabilities.
@@ -172,12 +172,11 @@ class XLMRobertaSelfAttentionVZ(nn.Module):
             outputs = outputs + (past_key_value,)
         return outputs
 
-
-class XLMRobertaAttentionVZ(nn.Module):
+class CamembertAttentionVZ(nn.Module):
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
-        self.self = XLMRobertaSelfAttentionVZ(config, position_embedding_type=position_embedding_type)
-        self.output = XLMRobertaSelfOutput(config)
+        self.self = CamembertSelfAttentionVZ(config, position_embedding_type=position_embedding_type) # Modified for Value Zeroing
+        self.output = CamembertSelfOutput(config)
         self.pruned_heads = set()
 
     def prune_heads(self, heads):
@@ -223,20 +222,20 @@ class XLMRobertaAttentionVZ(nn.Module):
         outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
         return outputs
 
-class XLMRobertaLayerVZ(nn.Module):
+class CamembertLayerVZ(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
-        self.attention = XLMRobertaAttentionVZ(config) # Changed for Value-Zeroing
+        self.attention = CamembertAttentionVZ(config)   # Changed for Value-Zeroing
         self.is_decoder = config.is_decoder
         self.add_cross_attention = config.add_cross_attention
         if self.add_cross_attention:
             if not self.is_decoder:
                 raise ValueError(f"{self} should be used as a decoder model if cross attention is added")
-            self.crossattention = XLMRobertaAttentionVZ(config, position_embedding_type="absolute")  # Changed for Value-Zeroing
-        self.intermediate = XLMRobertaIntermediate(config)
-        self.output = XLMRobertaOutput(config)
+            self.crossattention = CamembertAttentionVZ(config, position_embedding_type="absolute")  # Changed for Value-Zeroing
+        self.intermediate = CamembertIntermediate(config)
+        self.output = CamembertOutput(config)
 
     def forward(
         self,
@@ -247,7 +246,7 @@ class XLMRobertaLayerVZ(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         past_key_value: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         output_attentions: Optional[bool] = False,
-        zero_value_index = None,  # Added for Value-Zeroing
+        zero_value_index=None,  # Added for Value-Zeroing
     ) -> Tuple[torch.Tensor]:
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
         self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
@@ -310,12 +309,11 @@ class XLMRobertaLayerVZ(nn.Module):
         layer_output = self.output(intermediate_output, attention_output)
         return layer_output
 
-
-class XLMRobertaEncoderVZ(nn.Module):
+class CamembertEncoderVZ(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.layer = nn.ModuleList([XLMRobertaLayerVZ(config) for _ in range(config.num_hidden_layers)]) # Only change for Value-Zeroing
+        self.layer = nn.ModuleList([CamembertLayerVZ(config) for _ in range(config.num_hidden_layers)]) # Only change for Value-Zeroing
         self.gradient_checkpointing = False
 
     def forward(
@@ -408,17 +406,15 @@ class XLMRobertaEncoderVZ(nn.Module):
             cross_attentions=all_cross_attentions,
         )
 
-
-class XLMRobertaPreTrainedModel(PreTrainedModel):
+class CamembertPreTrainedModel(PreTrainedModel):
     """
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
     models.
     """
 
-    config_class = XLMRobertaConfig
+    config_class = CamembertConfig
     base_model_prefix = "roberta"
     supports_gradient_checkpointing = True
-    _no_split_modules = ["XLMRobertaEmbeddings", "XLMRobertaSelfAttention"]
 
     # Copied from transformers.models.bert.modeling_bert.BertPreTrainedModel._init_weights
     def _init_weights(self, module):
@@ -438,11 +434,11 @@ class XLMRobertaPreTrainedModel(PreTrainedModel):
             module.weight.data.fill_(1.0)
 
     def _set_gradient_checkpointing(self, module, value=False):
-        if isinstance(module, XLMRobertaEncoderVZ): # Changed for Value-Zeroing
+        if isinstance(module, CamembertEncoderVZ):  # Changed for Value-Zeroing
             module.gradient_checkpointing = value
 
 
-class XLMRobertaModelVZ(XLMRobertaPreTrainedModel):
+class CamembertModelVZ(CamembertPreTrainedModel):
     """
 
     The model can behave as an encoder (with only self-attention) as well as a decoder, in which case a layer of
@@ -450,23 +446,25 @@ class XLMRobertaModelVZ(XLMRobertaPreTrainedModel):
     all you need*_ by Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz
     Kaiser and Illia Polosukhin.
 
-    To behave as an decoder the model needs to be initialized with the `is_decoder` argument of the configuration set
-    to `True`. To be used in a Seq2Seq model, the model needs to initialized with both `is_decoder` argument and
+    To behave as a decoder the model needs to be initialized with the `is_decoder` argument of the configuration set to
+    `True`. To be used in a Seq2Seq model, the model needs to initialized with both `is_decoder` argument and
     `add_cross_attention` set to `True`; an `encoder_hidden_states` is then expected as an input to the forward pass.
 
     .. _*Attention is all you need*: https://arxiv.org/abs/1706.03762
 
     """
 
-    # Copied from transformers.models.bert.modeling_bert.BertModel.__init__ with Bert->XLMRoberta
+    _no_split_modules = []
+
+    # Copied from transformers.models.bert.modeling_bert.BertModel.__init__ with Bert->Camembert
     def __init__(self, config, add_pooling_layer=True):
         super().__init__(config)
         self.config = config
 
-        self.embeddings = XLMRobertaEmbeddings(config)
-        self.encoder = XLMRobertaEncoderVZ(config) # Changed for Value-Zeroing
+        self.embeddings = CamembertEmbeddings(config)
+        self.encoder = CamembertEncoderVZ(config)  # Changed for Value-Zeroing
 
-        self.pooler = XLMRobertaPooler(config) if add_pooling_layer else None
+        self.pooler = CamembertPooler(config) if add_pooling_layer else None
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -616,7 +614,7 @@ class XLMRobertaModelVZ(XLMRobertaPreTrainedModel):
             cross_attentions=encoder_outputs.cross_attentions,
         )
 
-class XLMRobertaForMaskedLMVZ(XLMRobertaPreTrainedModel):
+class CamembertForMaskedLMVZ(CamembertPreTrainedModel):
     _tied_weights_keys = ["lm_head.decoder.weight", "lm_head.decoder.bias"]
 
     def __init__(self, config):
@@ -624,12 +622,12 @@ class XLMRobertaForMaskedLMVZ(XLMRobertaPreTrainedModel):
 
         if config.is_decoder:
             logger.warning(
-                "If you want to use `XLMRobertaForMaskedLM` make sure `config.is_decoder=False` for "
+                "If you want to use `CamembertForMaskedLM` make sure `config.is_decoder=False` for "
                 "bi-directional self-attention."
             )
 
-        self.roberta = XLMRobertaModelVZ(config, add_pooling_layer=False)  # Modified for Value-Zeroing
-        self.lm_head = XLMRobertaLMHead(config)
+        self.roberta = CamembertModelVZ(config, add_pooling_layer=False)    # Modified for Value-Zeroing
+        self.lm_head = CamembertLMHead(config)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -640,6 +638,7 @@ class XLMRobertaForMaskedLMVZ(XLMRobertaPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head.decoder = new_embeddings
 
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -648,7 +647,7 @@ class XLMRobertaForMaskedLMVZ(XLMRobertaPreTrainedModel):
         position_ids: Optional[torch.LongTensor] = None,
         head_mask: Optional[torch.FloatTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        target_index = None,  # Added for Value-Zeroing
+        target_index=None,  # Added for Value-Zeroing
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
@@ -704,8 +703,8 @@ class XLMRobertaForMaskedLMVZ(XLMRobertaPreTrainedModel):
 
 
 # Not modified, just failed to import
-class XLMRobertaLMHead(nn.Module):
-    """Roberta Head for masked language modeling."""
+class CamembertLMHead(nn.Module):
+    """Camembert Head for masked language modeling."""
 
     def __init__(self, config):
         super().__init__()

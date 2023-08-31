@@ -175,7 +175,7 @@ class RobertaSelfAttentionVZ(nn.Module):
 class RobertaAttentionVZ(nn.Module):
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
-        self.self = RobertaSelfAttentionVZ(config, position_embedding_type=position_embedding_type)
+        self.self = RobertaSelfAttentionVZ(config, position_embedding_type=position_embedding_type) # Modified for value-zeroing
         self.output = RobertaSelfOutput(config)
         self.pruned_heads = set()
 
