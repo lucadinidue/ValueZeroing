@@ -1,4 +1,4 @@
-# MODIFIED FROM https://github.com/huggingface/transformers/blob/main/src/transformers/models/roberta/modeling_roberta.py
+# MODIFIED FROM https://github.com/huggingface/transformers/blob/main/src/transformers/models/xlm_roberta/modeling_xlm_roberta.py
 # ACCORDING TO https://github.com/hmohebbi/ValueZeroing/blob/main/modeling/customized_modeling_bert.py
 
 import math
@@ -15,22 +15,22 @@ from transformers.modeling_outputs import (
     BaseModelOutputWithPoolingAndCrossAttentions,
     BaseModelOutputWithPastAndCrossAttentions
 )
-from transformers.models.roberta.modeling_roberta import (
-    RobertaSelfOutput,
-    RobertaIntermediate,
-    RobertaOutput,
-    RobertaPooler,
-    RobertaEmbeddings
+from transformers.models.xlm_roberta.modeling_xlm_roberta import (
+    XLMRobertaSelfOutput,
+    XLMRobertaIntermediate,
+    XLMRobertaOutput,
+    XLMRobertaPooler,
+    XLMRobertaEmbeddings
 )
 from transformers.pytorch_utils import apply_chunking_to_forward, find_pruneable_heads_and_indices, prune_linear_layer
 from transformers.utils import logging
 from transformers.modeling_utils import PreTrainedModel
 
-from transformers.models.roberta.configuration_roberta import RobertaConfig
+from transformers.models.xlm_roberta.configuration_xlm_roberta import XLMRobertaConfig
 
 logger = logging.get_logger(__name__)
 
-class RobertaSelfAttentionVZ(nn.Module):
+class XLMRobertaSelfAttentionVZ(nn.Module):
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
@@ -138,7 +138,7 @@ class RobertaSelfAttentionVZ(nn.Module):
 
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
         if attention_mask is not None:
-            # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
+            # Apply the attention mask is (precomputed for all layers in XLMRobertaModel forward() function)
             attention_scores = attention_scores + attention_mask
 
         # Normalize the attention scores to probabilities.
@@ -172,11 +172,12 @@ class RobertaSelfAttentionVZ(nn.Module):
             outputs = outputs + (past_key_value,)
         return outputs
 
-class RobertaAttentionVZ(nn.Module):
+
+class XLMRobertaAttentionVZ(nn.Module):
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
-        self.self = RobertaSelfAttentionVZ(config, position_embedding_type=position_embedding_type)
-        self.output = RobertaSelfOutput(config)
+        self.self = XLMRobertaSelfAttentionVZ(config, position_embedding_type=position_embedding_type)
+        self.output = XLMRobertaSelfOutput(config)
         self.pruned_heads = set()
 
     def prune_heads(self, heads):
@@ -206,7 +207,7 @@ class RobertaAttentionVZ(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         past_key_value: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         output_attentions: Optional[bool] = False,
-        zero_value_index = None,    # Added for Value-Zeroing
+        zero_value_index = None,  # Added for Value-Zeroing
     ) -> Tuple[torch.Tensor]:
         self_outputs = self.self(
             hidden_states,
@@ -222,20 +223,20 @@ class RobertaAttentionVZ(nn.Module):
         outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
         return outputs
 
-class RobertaLayerVZ(nn.Module):
+class XLMRobertaLayerVZ(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
-        self.attention = RobertaAttentionVZ(config)     # Changed for Value-Zeroing
+        self.attention = XLMRobertaAttentionVZ(config) # Changed for Value-Zeroing
         self.is_decoder = config.is_decoder
         self.add_cross_attention = config.add_cross_attention
         if self.add_cross_attention:
             if not self.is_decoder:
                 raise ValueError(f"{self} should be used as a decoder model if cross attention is added")
-            self.crossattention = RobertaAttentionVZ(config, position_embedding_type="absolute")  # Changed for Value-Zeroing
-        self.intermediate = RobertaIntermediate(config)
-        self.output = RobertaOutput(config)
+            self.crossattention = XLMRobertaAttentionVZ(config, position_embedding_type="absolute")  # Changed for Value-Zeroing
+        self.intermediate = XLMRobertaIntermediate(config)
+        self.output = XLMRobertaOutput(config)
 
     def forward(
         self,
@@ -246,7 +247,7 @@ class RobertaLayerVZ(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         past_key_value: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         output_attentions: Optional[bool] = False,
-        zero_value_index = None,        # Added for Value-Zeroing
+        zero_value_index = None,  # Added for Value-Zeroing
     ) -> Tuple[torch.Tensor]:
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
         self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
@@ -255,7 +256,7 @@ class RobertaLayerVZ(nn.Module):
             attention_mask,
             head_mask,
             output_attentions=output_attentions,
-            zero_value_index=zero_value_index,              # Added for Value-Zeroing
+            zero_value_index=zero_value_index,  # Added for Value-Zeroing
             past_key_value=self_attn_past_key_value,
         )
         attention_output = self_attention_outputs[0]
@@ -309,11 +310,12 @@ class RobertaLayerVZ(nn.Module):
         layer_output = self.output(intermediate_output, attention_output)
         return layer_output
 
-class RobertaEncoderVZ(nn.Module):
+
+class XLMRobertaEncoderVZ(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.layer = nn.ModuleList([RobertaLayerVZ(config) for _ in range(config.num_hidden_layers)]) # Only change for Value-Zeroing
+        self.layer = nn.ModuleList([XLMRobertaLayerVZ(config) for _ in range(config.num_hidden_layers)]) # Only change for Value-Zeroing
         self.gradient_checkpointing = False
 
     def forward(
@@ -406,16 +408,17 @@ class RobertaEncoderVZ(nn.Module):
             cross_attentions=all_cross_attentions,
         )
 
-class RobertaPreTrainedModel(PreTrainedModel):
+
+class XLMRobertaPreTrainedModel(PreTrainedModel):
     """
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
     models.
     """
 
-    config_class = RobertaConfig
+    config_class = XLMRobertaConfig
     base_model_prefix = "roberta"
     supports_gradient_checkpointing = True
-    _no_split_modules = ["RobertaEmbeddings", "RobertaSelfAttention"]
+    _no_split_modules = ["XLMRobertaEmbeddings", "XLMRobertaSelfAttention"]
 
     # Copied from transformers.models.bert.modeling_bert.BertPreTrainedModel._init_weights
     def _init_weights(self, module):
@@ -435,10 +438,11 @@ class RobertaPreTrainedModel(PreTrainedModel):
             module.weight.data.fill_(1.0)
 
     def _set_gradient_checkpointing(self, module, value=False):
-        if isinstance(module, RobertaEncoderVZ):    # Changed for Value-Zeroing
+        if isinstance(module, XLMRobertaEncoderVZ): # Changed for Value-Zeroing
             module.gradient_checkpointing = value
 
-class RobertaModelVZ(RobertaPreTrainedModel):
+
+class XLMRobertaModelVZ(XLMRobertaPreTrainedModel):
     """
 
     The model can behave as an encoder (with only self-attention) as well as a decoder, in which case a layer of
@@ -454,15 +458,15 @@ class RobertaModelVZ(RobertaPreTrainedModel):
 
     """
 
-    # Copied from transformers.models.bert.modeling_bert.BertModel.__init__ with Bert->Roberta
+    # Copied from transformers.models.bert.modeling_bert.BertModel.__init__ with Bert->XLMRoberta
     def __init__(self, config, add_pooling_layer=True):
         super().__init__(config)
         self.config = config
 
-        self.embeddings = RobertaEmbeddings(config)
-        self.encoder = RobertaEncoderVZ(config)   # Changed for Value-Zeroing
+        self.embeddings = XLMRobertaEmbeddings(config)
+        self.encoder = XLMRobertaEncoderVZ(config) # Changed for Value-Zeroing
 
-        self.pooler = RobertaPooler(config) if add_pooling_layer else None
+        self.pooler = XLMRobertaPooler(config) if add_pooling_layer else None
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -480,7 +484,6 @@ class RobertaModelVZ(RobertaPreTrainedModel):
         """
         for layer, heads in heads_to_prune.items():
             self.encoder.layer[layer].attention.prune_heads(heads)
-
 
     # Copied from transformers.models.bert.modeling_bert.BertModel.forward
     def forward(
@@ -613,8 +616,7 @@ class RobertaModelVZ(RobertaPreTrainedModel):
             cross_attentions=encoder_outputs.cross_attentions,
         )
 
-
-class RobertaForMaskedLMVZ(RobertaPreTrainedModel):
+class XLMRobertaForMaskedLMVZ(XLMRobertaPreTrainedModel):
     _tied_weights_keys = ["lm_head.decoder.weight", "lm_head.decoder.bias"]
 
     def __init__(self, config):
@@ -622,12 +624,12 @@ class RobertaForMaskedLMVZ(RobertaPreTrainedModel):
 
         if config.is_decoder:
             logger.warning(
-                "If you want to use `RobertaForMaskedLM` make sure `config.is_decoder=False` for "
+                "If you want to use `XLMRobertaForMaskedLM` make sure `config.is_decoder=False` for "
                 "bi-directional self-attention."
             )
 
-        self.roberta = RobertaModelVZ(config, add_pooling_layer=False)  # Modified for Value-Zeroing
-        self.lm_head = RobertaLMHead(config)
+        self.roberta = XLMRobertaModelVZ(config, add_pooling_layer=False)  # Modified for Value-Zeroing
+        self.lm_head = XLMRobertaLMHead(config)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -638,7 +640,6 @@ class RobertaForMaskedLMVZ(RobertaPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head.decoder = new_embeddings
 
-
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -647,7 +648,7 @@ class RobertaForMaskedLMVZ(RobertaPreTrainedModel):
         position_ids: Optional[torch.LongTensor] = None,
         head_mask: Optional[torch.FloatTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        target_index = None,        # Added for Value-Zeroing
+        target_index = None,  # Added for Value-Zeroing
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
@@ -702,8 +703,8 @@ class RobertaForMaskedLMVZ(RobertaPreTrainedModel):
         )
 
 
-# Not modified, just failed to import
-class RobertaLMHead(nn.Module):
+# Not modified, just failed to import 
+class XLMRobertaLMHead(nn.Module):
     """Roberta Head for masked language modeling."""
 
     def __init__(self, config):
